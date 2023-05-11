@@ -6,7 +6,7 @@ This project involves the application of multi-threading in the context of Biton
 #### Bitonic Sort:
 
 <p align="center">
-  <img width="460" height="440" src=https://user-images.githubusercontent.com/74190584/237742018-d4e41b6f-6f10-4739-af94-93906c5237af.png>
+  <img width="440" height="220" src=https://user-images.githubusercontent.com/74190584/237742018-d4e41b6f-6f10-4739-af94-93906c5237af.png>
 </p>
 
 ## Complex Scenario Simulation: Factory Assembly Line
