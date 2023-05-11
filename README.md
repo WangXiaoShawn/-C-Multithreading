@@ -9,6 +9,13 @@ This project involves the application of multi-threading in the context of Biton
   <img width="440" height="220" src=https://user-images.githubusercontent.com/74190584/237742018-d4e41b6f-6f10-4739-af94-93906c5237af.png>
 </p>
 
+#### FFT:
+
+<p align="center">
+  <img width="440" height="220" src=https://user-images.githubusercontent.com/74190584/237742858-077711b9-0cdc-4297-8b33-0ef216c0a55a.png>
+</p>
+
+
 ## Complex Scenario Simulation: Factory Assembly Line
 
 The project also includes the simulation of complex scenarios, specifically within the context of a factory assembly line. By creating a dynamic simulation of the assembly line, strategic deficiencies were identified within the existing operations. Leveraging these insights, strategic improvements were proposed and implemented, leading to effective optimization of the overall assembly line process.
