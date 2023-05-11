@@ -2,7 +2,7 @@
 
 ## Multi-threading in Bitonic Sort and FFT Algorithms
 
-This project involves the application of multi-threading in the context of Bitonic Sort and Fast Fourier Transform (FFT) algorithms. The primary focus is to identify strategic points for the integration of multi-threading, with the objective of enhancing computational speed without compromising on the correctness of the algorithms. Under the constraints of utilizing two cores and up to four threads, both algorithms have demonstrated substantial improvements in efficiency, achieving at least a three-fold speed increase.
+This repository involves the application of multi-threading in the context of Bitonic Sort and Fast Fourier Transform (FFT) algorithms. The primary focus is to identify strategic points for the integration of multi-threading, with the objective of enhancing computational speed without compromising on the correctness of the algorithms. Under the constraints of utilizing two cores and up to four threads, both algorithms have demonstrated substantial improvements in efficiency, achieving at least a three-fold speed increase.
 #### Bitonic Sort:
 
 <p align="center">
@@ -18,4 +18,4 @@ This project involves the application of multi-threading in the context of Biton
 
 ## Complex Scenario Simulation: Factory Assembly Line
 
-The project also includes the simulation of complex scenarios, specifically within the context of a factory assembly line. By creating a dynamic simulation of the assembly line, strategic deficiencies were identified within the existing operations. Leveraging these insights, strategic improvements were proposed and implemented, leading to effective optimization of the overall assembly line process.
+This repository also encompassed the creation of intricate simulations, specifically tailored to mirror the operations of a factory assembly line. This allowed me to identify strategic gaps in the current workflow. In response to these findings, I proposed and incorporated strategic enhancements, resulting in the substantial optimization of the assembly line process. For the final version of the code, refer to 'FinalSimulation', and for a comprehensive report on the project, see 'MyFactory_Report'.
