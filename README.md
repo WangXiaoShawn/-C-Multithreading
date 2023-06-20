@@ -1,4 +1,11 @@
 # Multithreading C++
+## Complex Scenario Simulation: Factory Assembly Line
+
+This repository showcases the development of a complex simulation model, specifically tailored to replicate the operations of a factory assembly line, as demonstrated in `FinalStimulation.cpp`. 
+
+The purpose of this simulation was to identify any potential bottlenecks or inefficiencies in the existing workflow. Following the insights gathered from the simulation, I proposed and implemented strategic enhancements to optimize the assembly line process significantly. 
+
+For the final, optimized version of the code, please refer to the `FinalSimulation.cpp` file. For a more detailed understanding of the project, findings, and the strategic improvements implemented, you can read the comprehensive report provided in `MyFactory_Report`.
 
 ## Multi-threading in Bitonic Sort and FFT Algorithms
 
@@ -16,6 +23,4 @@ This repository involves the application of multi-threading in the context of Bi
 </p>
 
 
-## Complex Scenario Simulation: Factory Assembly Line
 
-This repository also encompassed the creation of intricate simulations, specifically tailored to mirror the operations of a factory assembly line. This allowed me to identify strategic gaps in the current workflow. In response to these findings, I proposed and incorporated strategic enhancements, resulting in the substantial optimization of the assembly line process. For the final version of the code, refer to 'FinalSimulation', and for a comprehensive report on the project, see 'MyFactory_Report'.
