@@ -1,5 +1,9 @@
 # Multithreading C++
 ## Complex Scenario Simulation: Factory Assembly Line
+<p align="center">
+  <img width="440" height="220" src=https://user-images.githubusercontent.com/74190584/247238444-4fb99b01-f5a6-4dda-b0a6-0626e2fe5a9f.png>
+</p>
+
 
 This repository showcases the development of a complex simulation model, specifically tailored to replicate the operations of a factory assembly line, as demonstrated in `FinalStimulation.cpp`. 
 
