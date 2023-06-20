@@ -1,0 +1,1402 @@
+// myFactory final stimumulation
+#include<thread>
+#include<vector>
+#include<iostream>
+#include<condition_variable>
+#include<chrono>
+#include<string>
+#include <fstream>
+#include <ostream>
+#include<queue>
+#include<numeric>
+#include <cmath>
+
+//using namespace chrono_literals; //us ms
+using namespace std;
+ofstream fout;
+mutex pmtx;
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
+	os << "(";
+	for (size_t i = 0; i < vec.size(); ++i) {
+		os << vec[i];
+		if (i < vec.size() - 1) {
+			os << ", ";
+		}
+	}
+	os << ")";
+	return os;
+}
+template <typename T>
+std::ofstream& operator<<(std::ofstream& fs, const std::vector<T>& vec) {
+	fs << "(";
+	for (size_t i = 0; i < vec.size(); ++i) {
+		fs << vec[i];
+		if (i < vec.size() - 1) {
+			fs << ", ";
+		}
+	}
+	fs << ")";
+	return fs;
+}
+std::ofstream& operator<<(std::ofstream& fs, const std::chrono::microseconds& duration) {
+	fs << duration.count() << " microseconds";
+	return fs;
+}
+std::ostream& operator<<(std::ostream& os, const std::chrono::microseconds& duration) {
+	os << duration.count() << " microseconds";
+	return os;
+}
+
+class buffer
+{
+public:
+	mutex bmtx;
+	condition_variable A_NOT_FULL;
+	condition_variable A_NOT_EMPTY;
+	condition_variable B_NOT_FULL;
+	condition_variable B_NOT_EMPTY;
+	condition_variable C_NOT_FULL;
+	condition_variable C_NOT_EMPTY;
+	condition_variable D_NOT_FULL;
+	condition_variable D_NOT_EMPTY;
+	condition_variable E_NOT_FULL;
+	condition_variable E_NOT_EMPTY;
+
+	bool a_not_empty = false;
+	bool b_not_empty = false;
+	bool c_not_empty = false;
+	bool d_not_empty = false;
+	bool e_not_empty = false;
+	atomic<int> completed_products = 0;
+	/***********************************************/
+	condition_variable buffer_not_full;
+	condition_variable buffer_not_empty;
+	bool not_empty = false; //一开始让生产者先开始
+	/***********************************************/
+	vector<int>bufferState{ 0,0,0,0,0 };// for test 
+	vector<int> const bufferCapacity{ 7,6,5,5,4 }; //每个part的buffer上限
+
+
+};
+class productWorkers
+{
+public:
+	productWorkers(int id, int maxtime) // constructor
+	{
+		this->productWorkerID = id;
+		this->Interation = 1;
+		this->onceAssembleTime = chrono::microseconds(0);
+		this->onceMoveTime = chrono::microseconds(0);
+		this->PickupOrderCapacity = 0;
+		this->PickupOrderMaxCapcity = 5;
+		this->pickupOrder = { 0,0,0,0,0 };
+		this->orignalpickupOrder = { 0,0,0,0,0 };
+		this->cartState = { 0,0,0,0,0 };
+		this->localState = { 0,0,0,0,0 };
+		this->oncelocalState = { 0,0,0,0,0 };
+		this->EachPartMoveTime =
+		{
+			chrono::microseconds(200),
+			chrono::microseconds(200),
+			chrono::microseconds(300),
+			chrono::microseconds(300),
+			chrono::microseconds(400)
+		};
+		this->EachPartAssemblyTime =
+		{
+			chrono::microseconds(600),
+			chrono::microseconds(600),
+			chrono::microseconds(700),
+			chrono::microseconds(700),
+			chrono::microseconds(800)
+		};
+		this->CurrentTime = chrono::microseconds(0);
+		this->AccuWaitTime = chrono::microseconds(0);
+		this->ProductMaxiumWaitTime = chrono::microseconds(maxtime);
+
+	}
+	/*******************************************************************************************************/
+	void gen_pickupOrder_twotype();//helper function of gen_pickup Order;
+	void gen_pickupOrder_threetype();//helper function of gen_pickup Order;
+	void gen_pickupOrder();// 1.基于两个helperfunction生成原始订单，然后基于loal state生成
+	void download_buffer(buffer& bu);//线程安全的情况下从buffer取下东西
+	void gen_moveTime();//interator的尽头，车里的东西运回来所要的时间
+	void gen_assemble(buffer& bu);// 如果order为0，说明东西不是在车里，就是被once_local 提取出来，用这两个同时计算组合时间 同时更新buffer
+	void setEnd(); //每次interator结束的时候，local_once的放回 local——state，cart里面的放回local——state 同时记录cart里面放回的时间调用（gen_move time）
+	void printInfo(buffer& bu);
+	void printPreDownLoad(buffer& bu, int sta);
+	void saveLogPreDownLoad(buffer& bu, int sta);
+	void printPostDownLoad(buffer& bu);
+	void saveLogPostDownload(buffer& bu);
+	void printEndIter(buffer& bu);
+	void saveLogEndIter(buffer& bu);
+	void record_CurrentTime();
+	void gen_NotifyOrder();
+	void download_bufferGreedy(buffer& bu);
+	/******************************************************************************************************/
+	void rest_Iter() //每次inter之前需要reset的信息
+	{
+		PickupOrderCapacity = 0;
+		pickupOrder = { 0,0,0,0,0 };
+		orignalpickupOrder = { 0,0,0,0,0 };
+		cartState = { 0,0,0,0,0 };
+		oncelocalState = { 0,0,0,0,0 };
+		while (smartNotify.size()) smartNotify.pop();
+		this->onceMoveTime = { chrono::microseconds(0) };
+		this->onceAssembleTime = { chrono::microseconds(0) };
+		this->AccuWaitTime = { chrono::microseconds(0) };
+	};
+	void each_Inter(buffer& bu, bool greedy)
+	{
+
+		rest_Iter();// 没有添加pq
+		record_CurrentTime();
+		gen_pickupOrder();
+		gen_NotifyOrder();
+		printPreDownLoad(bu, 0);
+		saveLogPreDownLoad(bu, 0);
+		if (!greedy)download_buffer(bu);
+		if (greedy)download_bufferGreedy(bu);
+		if (PickupOrderCapacity == 0)
+		{
+			gen_assemble(bu);// 更新了时间，buffer complete++
+			record_CurrentTime();
+			printEndIter(bu);
+			saveLogEndIter(bu);
+			Interation++;
+			return;
+		}
+		setEnd();// 每次都需要情况pq
+		record_CurrentTime();
+		printEndIter(bu);
+		saveLogEndIter(bu);
+		Interation++;
+	};
+	void Interations(buffer& bu)
+	{
+		for (int i = 0; i < 5; i++)
+		{
+			each_Inter(bu, true);// true greddy
+		}
+	}
+	/******************************************************************************************************/
+	int productWorkerID;
+	int Interation;
+	int PickupOrderCapacity; // 每次inter重新重置，只要是更改pickup order 都需要更改
+	int PickupOrderMaxCapcity;
+	vector<int> pickupOrder; // 基于loacal state生成新的pickup order::每次inter重新生成；
+	vector<int> orignalpickupOrder;//记录没有和local_state交互过的pickupOrder：：每次inter重新生成；
+	vector<int> cartState;//每个inter基于pickuporder从bufferstate取下来的 part：： 每次inter 重置
+	vector<int> localState;//在每个inter timeout之后，cart里拿到的part保留在这里：： 伴随整个class生命周期
+	vector<int> oncelocalState;// 每个inter 保存的state，注意当这个inter销毁时，需要把这个oncelocal 加回local state
+	vector<chrono::microseconds> EachPartMoveTime; //const
+	vector<chrono::microseconds> EachPartAssemblyTime;//const
+	chrono::microseconds onceAssembleTime; //如果本次inter可以成功，组合元器件，计算Assembletime 每次inter重置
+	chrono::microseconds onceMoveTime; //timeout cart运回，记录运回时间 每次inter重置
+	chrono::microseconds CurrentTime;//伴随每次inter不消亡，伴随整个实例的声明周期存在，记录一切的消耗时间（wait-time，move back, ass-time）
+	chrono::microseconds AccuWaitTime;//每次inter线程阻塞的等待时间，每次inter清空
+	chrono::microseconds ProductMaxiumWaitTime{ chrono::microseconds(28000) };// 每次inter线程阻塞的最长时间（const）
+	vector<string> const Status{ "New Pickup Order","Wakeup-Notified","Wakeup-Timeout" };
+	/******************************************************************************************************/
+	struct ComparePair // overload functor
+	{
+		bool operator()(const pair<int, char>& a, const pair<int, char>& b) const
+		{
+			return a.first < b.first;
+		}
+	};
+	priority_queue<pair<int, char>, vector<pair<int, char>>, ComparePair> smartNotify;// 每次要去buffer拿东西唤醒次序，每次inter 更新//
+};
+
+
+void productWorkers::download_bufferGreedy(buffer& bu)
+{
+	unique_lock<mutex> lck(bu.bmtx);
+	bool overtime = false;
+	std::chrono::microseconds interval(500);
+	auto end = chrono::steady_clock::now() + ProductMaxiumWaitTime;
+	auto start = chrono::steady_clock::now();
+	while (true)
+	{
+		if (PickupOrderCapacity == 0) return;
+		/***************************************************************/
+		while (this->smartNotify.size())
+		{
+			bool greedyOvertime = false;
+			char top = smartNotify.top().second;
+			smartNotify.pop();
+			if (top == 'A')
+			{
+				while (!bu.a_not_empty)
+				{
+					if (bu.A_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreDownLoad(bu, 1);
+					saveLogPreDownLoad(bu, 2);
+					for (int i = 0; i < pickupOrder.size(); i++)
+					{
+						if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+						while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+						{
+							if (bu.bufferState[i] < 0) break;
+							pickupOrder[i]--;
+							bu.bufferState[i]--;
+							cartState[i]++;
+							PickupOrderCapacity--;
+						}
+
+					}
+					printPostDownLoad(bu);
+					saveLogPostDownload(bu);
+					bu.a_not_empty = false;
+					bu.A_NOT_FULL.notify_all();
+
+				}
+			}
+			else if (top == 'B')
+			{
+				while (!bu.b_not_empty)
+				{
+					if (bu.B_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreDownLoad(bu, 1);
+					saveLogPreDownLoad(bu, 2);
+					for (int i = 0; i < pickupOrder.size(); i++)
+					{
+						if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+						while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+						{
+							if (bu.bufferState[i] < 0) break;
+							pickupOrder[i]--;
+							bu.bufferState[i]--;
+							cartState[i]++;
+							PickupOrderCapacity--;
+						}
+					}
+					printPostDownLoad(bu);
+					bu.b_not_empty = false;
+					bu.B_NOT_FULL.notify_all();
+
+				}
+
+			}
+			else if (top == 'C')
+			{
+				while (!bu.c_not_empty)
+				{
+					if (bu.C_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreDownLoad(bu, 1);
+					saveLogPreDownLoad(bu, 2);
+					for (int i = 0; i < pickupOrder.size(); i++)
+					{
+						if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+						while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+						{
+
+							if (bu.bufferState[i] < 0) break;
+							pickupOrder[i]--;
+							bu.bufferState[i]--;
+							cartState[i]++;
+							PickupOrderCapacity--;
+						}
+					}
+					printPostDownLoad(bu);
+					bu.c_not_empty = false;
+					bu.C_NOT_FULL.notify_all();
+
+				}
+
+			}
+			else if (top == 'D')
+			{
+				while (!bu.d_not_empty)
+				{
+					if (bu.D_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreDownLoad(bu, 1);
+					saveLogPreDownLoad(bu, 2);
+					for (int i = 0; i < pickupOrder.size(); i++)
+					{
+						if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+						while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+						{
+
+							if (bu.bufferState[i] < 0) break;
+							pickupOrder[i]--;
+							bu.bufferState[i]--;
+							cartState[i]++;
+							PickupOrderCapacity--;
+						}
+					}
+					printPostDownLoad(bu);
+					saveLogPostDownload(bu);
+					bu.d_not_empty = false;
+					bu.D_NOT_FULL.notify_all();
+
+				}
+
+			}
+			else if (top == 'E')
+			{
+				while (!bu.e_not_empty)
+				{
+					if (bu.E_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreDownLoad(bu, 1);
+					saveLogPreDownLoad(bu, 2);
+					for (int i = 0; i < pickupOrder.size(); i++)
+					{
+						if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+						while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+						{
+							//cout << "******" << endl;
+							if (bu.bufferState[i] < 0) break;
+							pickupOrder[i]--;
+							bu.bufferState[i]--;
+							cartState[i]++;
+							PickupOrderCapacity--;
+						}
+					}
+					printPostDownLoad(bu);
+					saveLogPostDownload(bu);
+					//cout << "wake up logic..." << endl;
+					bu.e_not_empty = false;
+					bu.E_NOT_FULL.notify_all();
+
+				}
+
+			}
+
+
+		}
+		/****************************/
+		if (PickupOrderCapacity == 0) return;
+		/***************/
+		while (!bu.not_empty)
+		{
+			if (bu.buffer_not_empty.wait_until(lck, end) == cv_status::timeout)
+			{
+				overtime = true;
+				break;
+			}
+		}
+
+		if (overtime == true)
+		{
+			AccuWaitTime = ProductMaxiumWaitTime;
+			printPreDownLoad(bu, 2);
+			saveLogPreDownLoad(bu, 2);
+			return;
+		}
+		else
+
+		{
+			auto curr = chrono::steady_clock::now();
+			AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+			printPreDownLoad(bu, 1);
+			saveLogPreDownLoad(bu, 2);
+			for (int i = 0; i < pickupOrder.size(); i++)
+			{
+				if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+				while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+				{
+
+					if (bu.bufferState[i] < 0) break;
+					pickupOrder[i]--;
+					bu.bufferState[i]--;
+					cartState[i]++;
+					PickupOrderCapacity--;
+				}
+			}
+			printPostDownLoad(bu);
+			saveLogPostDownload(bu);
+			bu.not_empty = false;
+			bu.buffer_not_full.notify_all();
+		}
+
+	}
+
+}
+void productWorkers::gen_NotifyOrder()// 这个应该是 order在buffer交互前得时刻放入，在这个设计中 pickuporder就是这个状态
+// 第一个元素key是现在有的个数，第二个是 对应的组件型号
+{
+	vector<char> temp = { 'A','B','C','D','E' };
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		pair<int, char> elem = { pickupOrder[i],temp[i] };
+		smartNotify.push(elem);
+	}
+
+}
+void productWorkers::saveLogPreDownLoad(buffer& bu, int sta)
+{
+	unique_lock<mutex> lck(pmtx);
+	fout << " " << endl;
+	fout << "Current Time :" << CurrentTime << endl;
+	fout << "Iteration : " << Interation << endl;
+	fout << "Product Worker ID : " << productWorkerID << endl;
+	fout << "Status : " << Status[sta] << endl;
+	fout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	fout << "Buffer State : " << bu.bufferState << endl;
+	fout << "Pickup Order : " << pickupOrder << endl;
+	fout << "Local State :" << localState << endl;
+	fout << "Once_local_State" << oncelocalState << endl;
+	fout << "Cart State :" << cartState << endl;
+	fout << "Total Completed Products: : " << bu.completed_products << endl;
+}
+void productWorkers::saveLogPostDownload(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	fout << "Updated Buffer State : " << bu.bufferState << endl;
+	fout << "Updated Pickup Order : " << pickupOrder << endl;
+	fout << "Updated Local State :" << localState << endl;
+	fout << "Once_local_State" << oncelocalState << endl;
+	fout << "Updated Cart State :" << cartState << endl;
+
+}
+void productWorkers::saveLogEndIter(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	fout << "Current Time : " << CurrentTime << endl;
+	fout << "Updated Local State : " << localState << endl;
+	fout << "Updated Cart State : " << cartState << endl;
+	fout << "Total Completed Products: " << bu.completed_products << endl;
+}
+void productWorkers::printPreDownLoad(buffer& bu, int sta)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << " " << endl;
+	cout << "Current Time :" << CurrentTime << endl;
+	cout << "Iteration : " << Interation << endl;
+	cout << "Product Worker ID : " << productWorkerID << endl;
+	cout << "Status : " << Status[sta] << endl;
+	cout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	cout << "Buffer State : " << bu.bufferState << endl;
+	cout << "Pickup Order : " << pickupOrder << endl;
+	cout << "Local State :" << localState << endl;
+	cout << "Once_local_State" << oncelocalState << endl;
+	cout << "Cart State :" << cartState << endl;
+	cout << "Total Completed Products: : " << bu.completed_products << endl;
+}
+void productWorkers::printEndIter(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << "Current Time : " << CurrentTime << endl;
+	cout << "Updated Local State : " << localState << endl;
+	cout << "Updated Cart State : " << cartState << endl;
+	cout << "Total Completed Products: " << bu.completed_products << endl;
+}
+void productWorkers::printPostDownLoad(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << "Updated Buffer State : " << bu.bufferState << endl;
+	cout << "Updated Pickup Order : " << pickupOrder << endl;
+	cout << "Updated Local State :" << localState << endl;
+	cout << "Once_local_State" << oncelocalState << endl;
+	cout << "Updated Cart State :" << cartState << endl;
+
+}
+void productWorkers::printInfo(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << " " << endl;
+	cout << "Current Time :" << CurrentTime << endl;
+	cout << "Iteration : " << Interation << endl;
+	cout << "Product Worker ID : " << productWorkerID << endl;
+	//cout << "Status : " << Status[sta] << endl;
+	cout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	cout << "Buffer State : " << bu.bufferState << endl;
+	cout << "Original Pickup Order : " << orignalpickupOrder << endl;
+	cout << "Pickup Order : " << pickupOrder << endl;
+	cout << "Local State :" << localState << endl;
+	cout << "Cart State :" << cartState << endl;
+	cout << "finish_task: " << bu.completed_products << endl;
+};
+void productWorkers::record_CurrentTime()
+{
+	CurrentTime += onceMoveTime + onceAssembleTime + AccuWaitTime;
+};
+void productWorkers::download_buffer(buffer& bu)
+{
+	unique_lock<mutex> lck(bu.bmtx);
+	bool overtime = false;
+	auto end = chrono::steady_clock::now() + ProductMaxiumWaitTime;
+	auto start = chrono::steady_clock::now();
+	while (true)
+	{
+		if (PickupOrderCapacity == 0) return;
+		while (!bu.not_empty)
+		{
+			if (bu.buffer_not_empty.wait_until(lck, end) == cv_status::timeout)
+			{
+				overtime = true;
+				break;
+			}
+		}
+
+		if (overtime == true)
+		{
+			AccuWaitTime = ProductMaxiumWaitTime;
+			printPreDownLoad(bu, 2);
+			saveLogPreDownLoad(bu, 2);
+			return;
+		}
+		else
+
+		{
+			auto curr = chrono::steady_clock::now();
+			AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+			printPreDownLoad(bu, 1);
+			saveLogPreDownLoad(bu, 2);
+			for (int i = 0; i < pickupOrder.size(); i++)
+			{
+				if (pickupOrder[i] == 0 || bu.bufferState[i] == 0) continue;
+				while (bu.bufferState[i] > 0 && pickupOrder[i] > 0)
+				{
+
+					if (bu.bufferState[i] < 0) break;
+					pickupOrder[i]--;
+					bu.bufferState[i]--;
+					cartState[i]++;
+					PickupOrderCapacity--;
+				}
+			}
+			printPostDownLoad(bu);
+			saveLogPostDownload(bu);
+
+			bu.not_empty = false;
+			bu.buffer_not_full.notify_all();
+		}
+
+	}
+
+}
+void productWorkers::setEnd()
+{
+	gen_moveTime();
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		while (oncelocalState[i] > 0)
+		{
+			localState[i] += oncelocalState[i]--;
+		}
+		while (cartState[i] > 0)
+		{
+			localState[i] += cartState[i]--;
+		}
+	}
+	while (smartNotify.size())
+	{
+		smartNotify.pop();
+	}
+}
+void productWorkers::gen_moveTime()
+{
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		onceMoveTime += cartState[i] * EachPartMoveTime[i];
+	}
+}
+void productWorkers::gen_assemble(buffer& bu)/*包含了setend 的过程*/
+{
+	if (PickupOrderCapacity > 0) return;
+
+	gen_moveTime();/*拉回来*/
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		onceAssembleTime += cartState[i] * EachPartAssemblyTime[i] + oncelocalState[i] * EachPartAssemblyTime[i]; /*组装*/
+	}
+	/*清空部件 其实可请可不清理，反正每次都要重置*/
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		cartState[i] = 0;
+		oncelocalState[i] = 0;
+	}
+	bu.completed_products++;
+
+}
+void productWorkers::gen_pickupOrder()
+{
+	srand(time(NULL));
+	int rd = rand() % 2;
+	if (rd == 0)
+	{
+		gen_pickupOrder_twotype();
+	}
+	else
+	{
+		gen_pickupOrder_threetype();
+	}
+	/************************************/
+	orignalpickupOrder = pickupOrder;
+	/***********************************/
+	/*
+	* 1.如果order需求 同时local state里面有，将order 减少
+	* 2.于此同时也将local state 减少，讲减少的放到 once_local
+	*/
+
+	for (int i = 0; i < pickupOrder.size(); i++)
+	{
+		while ((pickupOrder[i] > 0) && (localState[i] > 0))
+		{
+			pickupOrder[i]--;
+			PickupOrderCapacity--;
+			localState[i]--;
+			oncelocalState[i]++;
+		}
+	}
+}
+
+void productWorkers::gen_pickupOrder_threetype()
+{
+	srand(time(NULL));
+	if (PickupOrderCapacity >= PickupOrderMaxCapcity) return;
+	int index1 = rand() % 5;
+	int index2 = -0x3f3f3f;
+	int index3 = -0x3f3f3f;
+	while (true)
+	{
+		int temp = rand() % 5;
+		if (temp != index1)
+		{
+			index2 = temp;
+			break;
+		}
+	}
+	while (true)
+	{
+		int temp = rand() % 5;
+		if (temp != index1 && temp != index2)
+		{
+			index3 = temp;
+			break;
+		}
+	}
+	int cnt = PickupOrderMaxCapcity;
+	while (cnt)
+	{
+		int rd = rand() % 3;
+		if (rd == 0)
+		{
+			pickupOrder[index1]++;
+		}
+		else if (rd == 1)
+		{
+			pickupOrder[index2]++;
+		}
+		else
+		{
+			pickupOrder[index3]++;
+		}
+		PickupOrderCapacity++;
+		cnt--;
+	}
+
+}
+void productWorkers::gen_pickupOrder_twotype()
+{
+	srand(time(NULL));
+	if (PickupOrderCapacity >= PickupOrderMaxCapcity) return;
+	int index1 = rand() % 5;
+	int index2 = -0x3f3f3f;
+
+	while (true)
+	{
+		int temp = rand() % 5;
+		if (temp != index1)
+		{
+			index2 = temp;
+			break;
+		}
+	}
+	int cnt = PickupOrderMaxCapcity;
+	while (cnt)
+	{
+		if (rand() % 2 == 0)
+		{
+			pickupOrder[index1]++;
+			PickupOrderCapacity++;
+
+		}
+		else
+		{
+			pickupOrder[index2]++;
+			PickupOrderCapacity++;
+		}
+		cnt--;
+	}
+}
+
+class partWorkers
+{
+public:
+	partWorkers(int id, int maxtime)// constructor //test：：pass
+	{
+		partWorkerID = id;
+		this->Interation = 1;
+		this->loadOrderCapacity = 0;
+		this->loadOrderMaxCapcity = 6;
+		this->GenPartTime = { chrono::microseconds(0) };
+		this->MovePartTime = { chrono::microseconds(0) };
+		this->EachPartProduceTime =
+		{ chrono::microseconds(500),
+			chrono::microseconds(500),
+			chrono::microseconds(600),
+			chrono::microseconds(600),
+			chrono::microseconds(700)
+		};
+		this->EachPartMoveTime =
+		{
+			chrono::microseconds(200),
+			chrono::microseconds(200),
+			chrono::microseconds(300),
+			chrono::microseconds(300),
+			chrono::microseconds(400)
+		};
+		this->loadOrder = { 0,0,0,0,0 };
+		this->CurrentTime = chrono::microseconds(0);
+		this->AccuWaitTime = chrono::microseconds(0);
+		this->PartMaxiumWaitTime = chrono::microseconds(maxtime);
+	};
+	/*******************************************************************************************************/
+	void gen_loadOrder();//基于之前生成的order生成现在的order，同时记录生成order时产生的时间信息（GenPartTime）,更新loadorder的容量（loadOrderCapacity）；
+	void gen_movePartTime();//记录往 or 返 buffer的耗时
+	void record_CurrentTime();//将这次inter的总耗时（wait-time，produce耗时，move往返耗时）加入CurrentTime
+	void upload_buffer(buffer& bu);//将load_order upload到buffer，并且更新本地load_order信息//还有执行逻辑什么的 
+	void printInfo(buffer& bu);
+	void printPreUpload(buffer& bu, int sta);
+	void saveLogPreUpload(buffer& bu, int sta);
+	void printPostUpload(buffer& bu);
+	void saveLogPostUpload(buffer& bu);
+	/********************************************************/
+	void gen_NotifyOrder();
+	void upload_bufferGreedy(buffer& bu);
+	void rest_Iter() //每次inter之前需要reset的信息 // 
+	{
+		this->GenPartTime = { chrono::microseconds(0) };
+		this->MovePartTime = { chrono::microseconds(0) };
+		this->AccuWaitTime = { chrono::microseconds(0) };
+		while (smartNotify.size()) smartNotify.pop();
+	};
+	void each_Inter(buffer& bu, bool greedy)
+	{
+		rest_Iter();
+		gen_loadOrder();
+		gen_NotifyOrder();
+		gen_movePartTime();
+		record_CurrentTime();
+		printPreUpload(bu, 0);
+		saveLogPreUpload(bu, 0);
+		if (!greedy)upload_buffer(bu);
+		if (greedy)upload_bufferGreedy(bu);
+		gen_movePartTime();
+		record_CurrentTime();
+		Interation++;
+
+	}
+	void Interations(buffer& bu)
+	{
+		for (int i = 0; i < 5; i++)
+		{
+			each_Inter(bu, true); //true greddy
+		}
+
+	}
+	/*******************************************************************************************************/
+	int partWorkerID;
+	int Interation;
+	int loadOrderCapacity;
+	int loadOrderMaxCapcity;
+	chrono::microseconds GenPartTime;//每次生产的耗时（每次inter清空）
+	chrono::microseconds MovePartTime;//每次生产完了移动过去然后然后消耗完了再移动回来的耗时（move to+move back）每次inter清空
+	vector<chrono::microseconds> EachPartProduceTime; //每个部件的生产时间（const） 
+	vector<chrono::microseconds> EachPartMoveTime; //每个部件的移动时间（const）
+	vector<int>loadOrder; //每次生产出来的要送去buffer的order，产生新的要基于上一次剩下的,不更新伴随class整个生命周期
+	chrono::microseconds CurrentTime;//伴随每次inter不消亡，伴随整个实例的声明周期存在，记录一切的消耗时间（wait-time，move-to/back）
+	chrono::microseconds AccuWaitTime;//每次inter线程阻塞的等待时间，每次inter清空
+	chrono::microseconds PartMaxiumWaitTime{ chrono::microseconds(30000) };// 每次inter线程阻塞的最长时间（const）
+	vector<string> const Status{ "New Load Order","Wakeup-Notified","Wakeup-Timeout" };// process stage
+	struct ComparePair // overload functor
+	{
+		bool operator()(const pair<int, char>& a, const pair<int, char>& b) const
+		{
+			return a.first < b.first;
+		}
+	};
+	priority_queue<pair<int, char>, vector<pair<int, char>>, ComparePair> smartNotify;// 每次将东西放到buffer拿东西唤醒次序，每次inter 更新//
+/*******************************************************************************************************/
+
+};
+void partWorkers::upload_bufferGreedy(buffer& bu)
+{
+	unique_lock<mutex> lck(bu.bmtx);
+	bool overtime = false;
+	auto start = chrono::steady_clock::now();
+	auto end = chrono::steady_clock::now() + PartMaxiumWaitTime;
+	std::chrono::microseconds interval(500);
+	while (true)
+	{
+		if (loadOrderCapacity == 0) break;
+		while (this->smartNotify.size())
+		{
+			bool greedyOvertime = false;
+			char top = smartNotify.top().second;
+			smartNotify.pop();
+			if (top == 'A')
+			{
+				while (bu.a_not_empty)
+				{
+
+					if (bu.A_NOT_FULL.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreUpload(bu, 1);
+					saveLogPreUpload(bu, 1);
+					/*************************************************************************/
+					for (int i = 0; i < loadOrder.size(); i++)
+					{
+						while (bu.bufferState[i] < bu.bufferCapacity[i])
+						{
+							if (loadOrder[i] == 0) break;
+							bu.bufferState[i]++;
+							loadOrder[i]--;
+							loadOrderCapacity--;
+						}
+					}
+					printPostUpload(bu);
+					saveLogPostUpload(bu);
+					bu.a_not_empty = true;
+					bu.A_NOT_EMPTY.notify_all();
+					/*************************************************************************/
+
+				}
+			}
+			else if (top == 'B')
+			{
+				while (bu.b_not_empty)
+				{
+
+					if (bu.B_NOT_FULL.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreUpload(bu, 1);
+					saveLogPreUpload(bu, 1);
+					/*************************************************************************/
+					for (int i = 0; i < loadOrder.size(); i++)
+					{
+						while (bu.bufferState[i] < bu.bufferCapacity[i])
+						{
+							if (loadOrder[i] == 0) break;
+							bu.bufferState[i]++;
+							loadOrder[i]--;
+							loadOrderCapacity--;
+						}
+					}
+					printPostUpload(bu);
+					saveLogPostUpload(bu);
+					bu.b_not_empty = true;
+					bu.B_NOT_EMPTY.notify_all();
+					/*************************************************************************/
+
+				}
+			}
+			else if (top == 'C')
+			{
+				while (bu.c_not_empty)
+				{
+
+					if (bu.C_NOT_FULL.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreUpload(bu, 1);
+					saveLogPreUpload(bu, 1);
+					/*************************************************************************/
+					for (int i = 0; i < loadOrder.size(); i++)
+					{
+						while (bu.bufferState[i] < bu.bufferCapacity[i])
+						{
+							if (loadOrder[i] == 0) break;
+							bu.bufferState[i]++;
+							loadOrder[i]--;
+							loadOrderCapacity--;
+						}
+					}
+					printPostUpload(bu);
+					saveLogPostUpload(bu);
+					bu.c_not_empty = true;
+					bu.C_NOT_EMPTY.notify_all();
+					/*************************************************************************/
+
+				}
+			}
+			else if (top == 'D')/***/
+			{
+				while (bu.d_not_empty)
+				{
+					//if (bu.A_NOT_EMPTY.wait_for(lck, interval) == cv_status::timeout)
+					if (bu.D_NOT_FULL.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreUpload(bu, 1);
+					saveLogPreUpload(bu, 1);
+					/*************************************************************************/
+					for (int i = 0; i < loadOrder.size(); i++)
+					{
+						while (bu.bufferState[i] < bu.bufferCapacity[i])
+						{
+							if (loadOrder[i] == 0) break;
+							bu.bufferState[i]++;
+							loadOrder[i]--;
+							loadOrderCapacity--;
+						}
+					}
+					printPostUpload(bu);
+					saveLogPostUpload(bu);
+					bu.d_not_empty = true;
+					bu.D_NOT_EMPTY.notify_all();
+					/*************************************************************************/
+
+				}
+			}
+			else if (top == 'E')/***/
+			{
+				while (bu.e_not_empty)
+				{
+
+					if (bu.E_NOT_FULL.wait_for(lck, interval) == cv_status::timeout)
+					{
+						greedyOvertime = true;
+						break;
+					}
+				}
+				if (greedyOvertime == true)
+				{
+					AccuWaitTime += interval;
+					continue;
+				}
+				else
+				{
+					auto curr = chrono::steady_clock::now();
+					AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+					printPreUpload(bu, 1);
+					saveLogPreUpload(bu, 1);
+					/*************************************************************************/
+					for (int i = 0; i < loadOrder.size(); i++)
+					{
+						while (bu.bufferState[i] < bu.bufferCapacity[i])
+						{
+							if (loadOrder[i] == 0) break;
+							bu.bufferState[i]++;
+							loadOrder[i]--;
+							loadOrderCapacity--;
+						}
+					}
+					printPostUpload(bu);
+					saveLogPostUpload(bu);
+					bu.e_not_empty = true;
+					bu.E_NOT_EMPTY.notify_all();
+					/*************************************************************************/
+
+				}
+			}
+
+
+		}
+		/*****************************************/
+		if (loadOrderCapacity == 0) break;
+		/****************************************/
+		while (bu.not_empty)
+		{
+			if (bu.buffer_not_full.wait_until(lck, end) == cv_status::timeout)
+			{
+				overtime = true;
+				break;
+			}
+		}
+		/****************************************/
+		if (overtime) //如果超时了更新一下等待时间
+		{
+			AccuWaitTime = PartMaxiumWaitTime;
+			printPreUpload(bu, 2);
+			printPostUpload(bu);
+			saveLogPreUpload(bu, 2);
+			saveLogPostUpload(bu);
+			return;
+		}
+		else
+		{
+			auto curr = chrono::steady_clock::now();
+			AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+			printPreUpload(bu, 1);
+			saveLogPreUpload(bu, 1);
+			/*************************************************************************/
+			for (int i = 0; i < loadOrder.size(); i++)
+			{
+				while (bu.bufferState[i] < bu.bufferCapacity[i])
+				{
+					if (loadOrder[i] == 0) break;
+					bu.bufferState[i]++;
+					loadOrder[i]--;
+					loadOrderCapacity--;
+				}
+			}
+			printPostUpload(bu);
+			saveLogPostUpload(bu);
+			bu.not_empty = true;
+			bu.buffer_not_empty.notify_all();
+			/*************************************************************************/
+
+		}
+
+	}
+
+}
+
+void partWorkers::gen_NotifyOrder()
+{
+	vector<char> temp = { 'A','B','C','D','E' };
+	for (int i = 0; i < loadOrder.size(); i++)
+	{
+		pair<int, char> elem = { loadOrder[i],temp[i] };
+		smartNotify.push(elem);
+	}
+}
+
+void partWorkers::saveLogPostUpload(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	fout << "Updated Buffer State : " << bu.bufferState << endl;
+	fout << "Updated Load Order : " << loadOrder << endl;
+	fout << " " << endl;
+}
+void partWorkers::saveLogPreUpload(buffer& bu, int sta)
+{
+	unique_lock<mutex> lck(pmtx);
+	fout << " " << endl;
+	fout << "Current Time :" << CurrentTime << endl;
+	fout << "Iteration : " << Interation << endl;
+	fout << "Part Worker ID : " << partWorkerID << endl;
+	fout << "Status : " << Status[sta] << endl;
+	fout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	fout << "Buffer State : " << bu.bufferState << endl;
+	fout << "Load Order : " << loadOrder << endl;
+}
+void partWorkers::printPreUpload(buffer& bu, int sta)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << " " << endl;
+	cout << "Current Time :" << CurrentTime << endl;
+	cout << "Iteration : " << Interation << endl;
+	cout << "Part Worker ID : " << partWorkerID << endl;
+	cout << "Status : " << Status[sta] << endl;
+	cout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	cout << "Buffer State : " << bu.bufferState << endl;
+	cout << "Load Order : " << loadOrder << endl;
+
+}
+void partWorkers::printPostUpload(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << "Updated Buffer State : " << bu.bufferState << endl;
+	cout << "Updated Load Order : " << loadOrder << endl;
+	cout << " " << endl;
+}
+void partWorkers::printInfo(buffer& bu)
+{
+	unique_lock<mutex> lck(pmtx);
+	cout << " " << endl;
+	cout << "Current Time :" << CurrentTime << endl;
+	cout << "Iteration : " << Interation << endl;
+	cout << "Part Worker ID : " << partWorkerID << endl;
+	cout << "Accumulated Wait Time : " << AccuWaitTime << endl;
+	cout << "Buffer State : " << bu.bufferState << endl;
+	cout << "Load Order : " << loadOrder << endl;
+	cout << "Gen part time :" << GenPartTime << endl;
+	cout << "one way Move time :" << MovePartTime << endl;
+}
+void partWorkers::upload_buffer(buffer& bu)
+{
+	unique_lock<mutex> lck(bu.bmtx);
+	bool overtime = false;
+	auto start = chrono::steady_clock::now();
+	auto end = chrono::steady_clock::now() + PartMaxiumWaitTime;
+	while (true)
+	{
+		if (loadOrderCapacity == 0) break;
+		/*****************************************/
+		while (bu.not_empty)
+		{
+			if (bu.buffer_not_full.wait_until(lck, end) == cv_status::timeout)
+			{
+				overtime = true;
+				break;
+			}
+		}
+		/****************************************/
+		if (overtime) //如果超时了更新一下等待时间
+		{
+			AccuWaitTime = PartMaxiumWaitTime;
+			printPreUpload(bu, 2);
+			printPostUpload(bu);
+			saveLogPreUpload(bu, 2);
+			saveLogPostUpload(bu);
+			return;
+		}
+		else
+		{
+			auto curr = chrono::steady_clock::now();
+			AccuWaitTime += chrono::duration_cast<chrono::microseconds>(curr - start);
+			printPreUpload(bu, 1);
+			saveLogPreUpload(bu, 1);
+			/*************************************************************************/
+			for (int i = 0; i < loadOrder.size(); i++)
+			{
+				while (bu.bufferState[i] < bu.bufferCapacity[i])
+				{
+					if (loadOrder[i] == 0) break;
+					bu.bufferState[i]++;
+					loadOrder[i]--;
+					loadOrderCapacity--;
+				}
+			}
+			printPostUpload(bu);
+			saveLogPostUpload(bu);
+			bu.not_empty = true;
+			bu.buffer_not_empty.notify_all();
+			/*************************************************************************/
+
+		}
+
+	}
+
+}
+
+void partWorkers::record_CurrentTime()
+{
+
+	CurrentTime += GenPartTime + MovePartTime + AccuWaitTime;
+
+}
+void partWorkers::gen_movePartTime()
+{
+	for (int i = 0; i < loadOrder.size(); i++)
+	{
+		MovePartTime += loadOrder[i] * EachPartMoveTime[i];
+	}
+}
+void partWorkers::gen_loadOrder()
+{
+	srand(time(NULL));
+	while (loadOrderCapacity < loadOrderMaxCapcity)
+	{
+		int idx = rand() % 5;
+		loadOrder[idx]++;
+		GenPartTime += EachPartProduceTime[idx];
+		loadOrderCapacity++;
+	}
+	return;
+}
+class myFactory
+{
+public:
+	myFactory(int m, int n)
+	{
+		this->NumPartWorkers = m;
+		this->NumProduceWorkers = n;
+	}
+	void stimulation(int i)
+	{
+		for (int m = i; m > 0; m--)
+		{
+			buffer bu;
+			PartW.clear();
+			ProductW.clear();
+			PartThread.clear();
+			ProductThread.clear();
+			for (int i = 0; i < NumPartWorkers; ++i)
+			{
+				PartW.emplace_back(partWorkers(i + 1, MaxTimePart));
+			}
+			for (int i = 0; i < NumProduceWorkers; ++i)
+			{
+				ProductW.emplace_back(productWorkers(i, MaxTimeProduct));
+			}
+			for (int i = 0; i < NumPartWorkers; ++i)
+			{
+				PartThread.emplace_back(&partWorkers::Interations, ref(PartW[i]), ref(bu));
+			}
+			for (int i = 0; i < NumProduceWorkers; ++i)
+			{
+				ProductThread.emplace_back(&productWorkers::Interations, ref(ProductW[i]), ref(bu));
+			}
+			for (auto& it : PartThread) it.join();
+			for (auto& it : ProductThread) it.join();
+			cache.emplace_back(double(bu.completed_products.load()));
+		}
+	}
+	double mean(const std::vector<double>& values) {
+		double sum = std::accumulate(values.begin(), values.end(), 0.0);
+		return sum / values.size();
+	}
+	double variance(const std::vector<double>& values) {
+		double mean_value = mean(values);
+		double temp = 0;
+		for (const auto& value : values) {
+			temp += (value - mean_value) * (value - mean_value);
+		}
+		return temp / values.size();
+	}
+	double standard_deviation(const std::vector<double>& values) {
+		return std::sqrt(variance(values));
+	}
+	double max_value(const std::vector<double>& values) {
+		return *std::max_element(values.begin(), values.end());
+	}
+	double min_value(const std::vector<double>& values) {
+		return *std::min_element(values.begin(), values.end());
+	}
+
+	int NumPartWorkers = 0;
+	int NumProduceWorkers = 0;
+	vector<double> cache;
+	vector<thread> PartThread;
+	vector<thread>ProductThread;
+	vector<partWorkers> PartW;
+	vector<productWorkers> ProductW;
+	const int MaxTimePart{ 30000 }, MaxTimeProduct{ 28000 };
+	~myFactory()
+	{
+		cout << endl;
+		cout << endl;
+		cout << "***********************************************" << endl;
+		cout << "Mean: " << mean(cache) << endl;
+		cout << "Sd: " << standard_deviation(cache) << endl;
+		cout << "Min:" << min_value(cache) << endl;
+		cout << "Max:" << max_value(cache) << endl;
+		cout << "***********************************************"<<endl;
+	}
+};
+
+int main()
+{
+	myFactory f1(10, 10);
+	f1.stimulation(10);
+	return 0;
+
+}
